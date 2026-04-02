@@ -1,0 +1,38 @@
+# ── Dependencies ─────────────────────────────
+node_modules/
+
+# ── Next.js ───────────────────────────────────
+web/.next/
+web/out/
+
+# ── SQLite ────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ── Python ───────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.env
+
+# ── Jupyter ───────────────────────────────────
+.ipynb_checkpoints/
+
+# ── ML artifacts ─────────────────────────────
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+models/
+
+# ── OS / editor ───────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
