@@ -12,7 +12,7 @@ export default async function RootLayout({ children }) {
   if (customerId) {
     try {
       customer = get(
-        'SELECT name, segment FROM customers WHERE id = ?',
+        'SELECT full_name AS name, loyalty_tier AS segment FROM customers WHERE customer_id = ?',
         customerId
       );
     } catch {

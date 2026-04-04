@@ -17,42 +17,37 @@ export const dynamic = 'force-dynamic';
   Only 'pending' and 'processing' orders are shown.
 */
 
-export default function WarehousePage() {
+export default function WarehousePage({ searchParams }) {
+  const filter = searchParams?.customer?.trim().toLowerCase() ?? '';
   let queue = [];
   try {
     queue = all(`
       SELECT
-        o.id                                               AS order_id,
-        o.order_date,
-        o.status,
-        o.total_amount,
-        c.name                                             AS customer_name,
-        c.segment,
-        CAST(julianday('now') - julianday(o.order_date) AS INTEGER)
-                                                           AS days_waiting,
-        COALESCE(op.priority_score, 50)                    AS ml_priority,
-        COALESCE(op.churn_prob, 0)                         AS churn_prob,
+        o.order_id,
+        o.order_datetime                                    AS order_date,
+        CASE WHEN o.is_fraud=1 THEN 'cancelled' WHEN o.fulfilled=1 THEN 'delivered' ELSE 'pending' END
+                                                            AS status,
+        o.order_total                                       AS total_amount,
+        c.full_name                                         AS customer_name,
+        c.loyalty_tier                                      AS segment,
+        CAST(julianday('now') - julianday(o.order_datetime) AS INTEGER)
+                                                            AS days_waiting,
+        COALESCE(op.late_delivery_probability * 100, 50)    AS ml_priority,
+        COALESCE(op.late_delivery_probability, 0)           AS churn_prob,
         -- composite warehouse priority (higher = more urgent)
         (
-          CAST(julianday('now') - julianday(o.order_date) AS INTEGER) * 3
-          + CASE c.segment WHEN 'gold' THEN 30 WHEN 'silver' THEN 15 ELSE 0 END
-          + COALESCE(op.priority_score, 50)
-        )                                                  AS priority
+          CAST(julianday('now') - julianday(o.order_datetime) AS INTEGER) * 3
+          + CASE c.loyalty_tier WHEN 'gold' THEN 30 WHEN 'silver' THEN 15 ELSE 0 END
+          + COALESCE(op.late_delivery_probability * 100, 50)
+        )                                                   AS priority
       FROM orders o
-      JOIN customers c ON c.id = o.customer_id
-      LEFT JOIN (
-        SELECT customer_id, priority_score, churn_prob, scored_at
-        FROM order_predictions
-        WHERE (customer_id, scored_at) IN (
-          SELECT customer_id, MAX(scored_at)
-          FROM order_predictions
-          GROUP BY customer_id
-        )
-      ) op ON op.customer_id = o.customer_id
-      WHERE o.status IN ('pending', 'processing')
+      JOIN customers c ON c.customer_id = o.customer_id
+      LEFT JOIN order_predictions op ON op.order_id = o.order_id
+      WHERE o.fulfilled = 0 AND o.is_fraud = 0
+        ${filter ? `AND lower(c.full_name) LIKE '%' || lower(?) || '%'` : ''}
       ORDER BY priority DESC
       LIMIT 50
-    `);
+    `, ...(filter ? [filter] : []));
   } catch {
     // DB may not exist yet
   }
@@ -64,9 +59,20 @@ export default function WarehousePage() {
       <div className="page-header">
         <h1>Warehouse Priority Queue</h1>
         <span style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
-          Top 50 open orders · sorted by priority
+          {filter ? `Filtered · ` : 'Top 50 open orders · '}sorted by priority
         </span>
       </div>
+
+      <form method="GET" style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>
+        <input
+          name="customer"
+          defaultValue={filter}
+          placeholder="Filter by customer name…"
+          style={{ flex: 1, padding: '0.4rem 0.75rem', border: '1px solid var(--border)', borderRadius: 6, fontSize: '0.875rem' }}
+        />
+        <button type="submit" className="btn btn-primary" style={{ padding: '0.4rem 1rem' }}>Filter</button>
+        {filter && <a href="/warehouse" className="btn" style={{ padding: '0.4rem 1rem' }}>Clear</a>}
+      </form>
 
       {queue.length === 0 ? (
         <div className="card">

@@ -1,8 +1,10 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-// shop.db lives one level up from the web/ directory (project root)
-const DB_PATH = path.join(process.cwd(), '..', 'shop.db');
+// shop.db lives at the project root (two levels up from web/lib/)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_PATH = path.join(__dirname, '..', '..', 'shop.db');
 
 let _db = null;
 
@@ -11,6 +13,15 @@ export function getDb() {
     _db = new Database(DB_PATH);
     _db.pragma('journal_mode = WAL');
     _db.pragma('foreign_keys = ON');
+    _db.exec(`CREATE TABLE IF NOT EXISTS customer_predictions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id    INTEGER NOT NULL,
+      churn_prob     REAL,
+      predicted_ltv  REAL,
+      priority_score REAL,
+      scored_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      model_version  TEXT NOT NULL DEFAULT 'heuristic-v1'
+    )`);
   }
   return _db;
 }

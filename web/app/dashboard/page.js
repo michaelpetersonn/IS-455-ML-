@@ -11,16 +11,17 @@ export default async function DashboardPage() {
   if (!customerId) redirect('/');
 
   const customer = get(
-    `SELECT c.*, p.churn_prob, p.predicted_ltv, p.priority_score, p.scored_at
+    `SELECT c.customer_id AS id, c.full_name AS name, c.email, c.loyalty_tier AS segment,
+            p.churn_prob, p.predicted_ltv, p.priority_score, p.scored_at
      FROM customers c
      LEFT JOIN (
        SELECT customer_id, churn_prob, predicted_ltv, priority_score, scored_at
-       FROM order_predictions
+       FROM customer_predictions
        WHERE (customer_id, scored_at) IN (
-         SELECT customer_id, MAX(scored_at) FROM order_predictions GROUP BY customer_id
+         SELECT customer_id, MAX(scored_at) FROM customer_predictions GROUP BY customer_id
        )
-     ) p ON p.customer_id = c.id
-     WHERE c.id = ?`,
+     ) p ON p.customer_id = c.customer_id
+     WHERE c.customer_id = ?`,
     customerId
   );
   if (!customer) redirect('/');
@@ -28,17 +29,19 @@ export default async function DashboardPage() {
   const stats = get(
     `SELECT
        COUNT(*)                                   AS order_count,
-       COALESCE(SUM(total_amount), 0)             AS total_spent,
-       COALESCE(AVG(total_amount), 0)             AS avg_order,
-       MAX(order_date)                            AS last_order
+       COALESCE(SUM(order_total), 0)              AS total_spent,
+       COALESCE(AVG(order_total), 0)              AS avg_order,
+       MAX(order_datetime)                        AS last_order
      FROM orders WHERE customer_id = ?`,
     customerId
   );
 
   const recentOrders = all(
-    `SELECT id, order_date, status, total_amount
+    `SELECT order_id AS id, order_datetime AS order_date,
+            CASE WHEN is_fraud=1 THEN 'cancelled' WHEN fulfilled=1 THEN 'delivered' ELSE 'pending' END AS status,
+            order_total AS total_amount
      FROM orders WHERE customer_id = ?
-     ORDER BY order_date DESC LIMIT 5`,
+     ORDER BY order_datetime DESC LIMIT 5`,
     customerId
   );
 

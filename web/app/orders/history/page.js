@@ -9,27 +9,29 @@ export default async function OrderHistoryPage() {
   const customerId = cookieStore.get('customer_id')?.value;
   if (!customerId) redirect('/');
 
-  const customer = get('SELECT name FROM customers WHERE id = ?', customerId);
+  const customer = get('SELECT full_name AS name FROM customers WHERE customer_id = ?', customerId);
   if (!customer) redirect('/');
 
   const orders = all(
-    `SELECT o.id, o.order_date, o.status, o.total_amount,
-            COUNT(oi.id) AS item_count
+    `SELECT o.order_id AS id, o.order_datetime AS order_date,
+            CASE WHEN o.is_fraud=1 THEN 'cancelled' WHEN o.fulfilled=1 THEN 'delivered' ELSE 'pending' END AS status,
+            o.order_total AS total_amount,
+            COUNT(oi.order_item_id) AS item_count
      FROM orders o
-     LEFT JOIN order_items oi ON oi.order_id = o.id
+     LEFT JOIN order_items oi ON oi.order_id = o.order_id
      WHERE o.customer_id = ?
-     GROUP BY o.id
-     ORDER BY o.order_date DESC`,
+     GROUP BY o.order_id
+     ORDER BY o.order_datetime DESC`,
     customerId
   );
 
   // For the expanded view, also pull line items per order (top 50 orders)
   const items = all(
-    `SELECT oi.order_id, p.name AS product_name, oi.quantity, oi.unit_price
+    `SELECT oi.order_id, p.product_name AS product_name, oi.quantity, oi.unit_price
      FROM order_items oi
-     JOIN products p ON p.id = oi.product_id
+     JOIN products p ON p.product_id = oi.product_id
      WHERE oi.order_id IN (
-       SELECT id FROM orders WHERE customer_id = ? ORDER BY order_date DESC LIMIT 50
+       SELECT order_id FROM orders WHERE customer_id = ? ORDER BY order_datetime DESC LIMIT 50
      )
      ORDER BY oi.order_id DESC`,
     customerId

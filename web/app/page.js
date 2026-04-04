@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export default function SelectCustomerPage() {
   let customers = [];
   try {
-    customers = all('SELECT id, name, email, segment FROM customers ORDER BY name');
+    customers = all('SELECT customer_id AS id, full_name AS name, email, loyalty_tier AS segment FROM customers ORDER BY full_name');
   } catch {
     // DB not seeded yet
   }

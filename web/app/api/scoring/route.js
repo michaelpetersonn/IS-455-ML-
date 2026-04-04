@@ -58,19 +58,19 @@ export async function POST() {
   try {
     const customers = all(`
       SELECT
-        c.id,
-        c.name,
-        c.segment,
+        c.customer_id                                        AS id,
+        c.full_name                                          AS name,
+        c.loyalty_tier                                       AS segment,
         c.created_at,
-        COUNT(o.id)                                        AS order_count,
-        COALESCE(SUM(o.total_amount), 0)                   AS total_spent,
-        CAST(julianday('now') - julianday(MAX(o.order_date)) AS INTEGER)
-                                                           AS days_since_last,
+        COUNT(o.order_id)                                    AS order_count,
+        COALESCE(SUM(o.order_total), 0)                      AS total_spent,
+        CAST(julianday('now') - julianday(MAX(o.order_datetime)) AS INTEGER)
+                                                             AS days_since_last,
         CAST(julianday('now') - julianday(c.created_at) AS INTEGER)
-                                                           AS account_age_days
+                                                             AS account_age_days
       FROM customers c
-      LEFT JOIN orders o ON o.customer_id = c.id
-      GROUP BY c.id
+      LEFT JOIN orders o ON o.customer_id = c.customer_id
+      GROUP BY c.customer_id
     `);
 
     const scores = customers.map((c) => {
@@ -82,17 +82,17 @@ export async function POST() {
     transaction(() => {
       for (const s of scores) {
         run(
-          `INSERT INTO order_predictions
+          `INSERT INTO customer_predictions
              (customer_id, churn_prob, predicted_ltv, priority_score, scored_at, model_version)
            VALUES (?, ?, ?, ?, datetime('now'), 'heuristic-v1')`,
           s.id, s.churn_prob, s.predicted_ltv, s.priority_score
         );
-        // Update customer segment based on predicted LTV + churn
-        const newSegment =
+        // Update loyalty tier based on predicted LTV + churn
+        const newTier =
           s.predicted_ltv >= 300 && s.churn_prob < 0.4 ? 'gold'
           : s.predicted_ltv >= 100 || s.churn_prob < 0.6 ? 'silver'
-          : 'bronze';
-        run('UPDATE customers SET segment = ? WHERE id = ?', newSegment, s.id);
+          : 'none';
+        run('UPDATE customers SET loyalty_tier = ? WHERE customer_id = ?', newTier, s.id);
       }
     });
 
