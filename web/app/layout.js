@@ -11,8 +11,8 @@ export default async function RootLayout({ children }) {
   let customer = null;
   if (customerId) {
     try {
-      customer = get(
-        'SELECT full_name AS name, loyalty_tier AS segment FROM customers WHERE customer_id = ?',
+      customer = await get(
+        'SELECT full_name AS name, loyalty_tier AS segment FROM customers WHERE customer_id = $1',
         customerId
       );
     } catch {

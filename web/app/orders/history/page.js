@@ -9,29 +9,29 @@ export default async function OrderHistoryPage() {
   const customerId = cookieStore.get('customer_id')?.value;
   if (!customerId) redirect('/');
 
-  const customer = get('SELECT full_name AS name FROM customers WHERE customer_id = ?', customerId);
+  const customer = await get('SELECT full_name AS name FROM customers WHERE customer_id = $1', customerId);
   if (!customer) redirect('/');
 
-  const orders = all(
+  const orders = await all(
     `SELECT o.order_id AS id, o.order_datetime AS order_date,
             CASE WHEN o.is_fraud=1 THEN 'cancelled' WHEN o.fulfilled=1 THEN 'delivered' ELSE 'pending' END AS status,
             o.order_total AS total_amount,
             COUNT(oi.order_item_id) AS item_count
      FROM orders o
      LEFT JOIN order_items oi ON oi.order_id = o.order_id
-     WHERE o.customer_id = ?
+     WHERE o.customer_id = $1
      GROUP BY o.order_id
      ORDER BY o.order_datetime DESC`,
     customerId
   );
 
   // For the expanded view, also pull line items per order (top 50 orders)
-  const items = all(
+  const items = await all(
     `SELECT oi.order_id, p.product_name AS product_name, oi.quantity, oi.unit_price
      FROM order_items oi
      JOIN products p ON p.product_id = oi.product_id
      WHERE oi.order_id IN (
-       SELECT order_id FROM orders WHERE customer_id = ? ORDER BY order_datetime DESC LIMIT 50
+       SELECT order_id FROM orders WHERE customer_id = $1 ORDER BY order_datetime DESC LIMIT 50
      )
      ORDER BY oi.order_id DESC`,
     customerId

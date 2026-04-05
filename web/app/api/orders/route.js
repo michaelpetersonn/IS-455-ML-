@@ -1,20 +1,20 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { get, run, transaction } from '@/lib/db';
+import { all, get, sql } from '@/lib/db';
 
 export async function GET() {
   const cookieStore = await cookies();
   const customerId = cookieStore.get('customer_id')?.value;
   if (!customerId) return NextResponse.json({ error: 'No customer selected' }, { status: 401 });
 
-  const orders = (await import('@/lib/db')).all(
+  const orders = await all(
     `SELECT o.order_id AS id, o.order_datetime AS order_date,
             CASE WHEN o.is_fraud=1 THEN 'cancelled' WHEN o.fulfilled=1 THEN 'delivered' ELSE 'pending' END AS status,
             o.order_total AS total_amount,
             COUNT(oi.order_item_id) AS item_count
      FROM orders o
      LEFT JOIN order_items oi ON oi.order_id = o.order_id
-     WHERE o.customer_id = ?
+     WHERE o.customer_id = $1
      GROUP BY o.order_id
      ORDER BY o.order_datetime DESC`,
     customerId
@@ -35,38 +35,44 @@ export async function POST(request) {
   }
 
   try {
-    const customer = get('SELECT loyalty_tier AS segment FROM customers WHERE customer_id = ?', customerId);
+    const customer = await get(
+      'SELECT loyalty_tier AS segment FROM customers WHERE customer_id = $1',
+      customerId
+    );
     if (!customer) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
 
-    const result = transaction(() => {
+    const result = await sql.begin(async (tx) => {
       let totalAmount = 0;
       const lineItems = [];
 
       for (const { product_id, quantity } of items) {
         if (quantity <= 0) continue;
-        const product = get('SELECT product_id AS id, price FROM products WHERE product_id = ?', product_id);
+        const [product] = await tx.unsafe(
+          'SELECT product_id AS id, price FROM products WHERE product_id = $1',
+          [product_id]
+        );
         if (!product) throw new Error(`Product ${product_id} not found`);
-        totalAmount += product.price * quantity;
-        lineItems.push({ product_id, quantity, unit_price: product.price });
+        totalAmount += Number(product.price) * quantity;
+        lineItems.push({ product_id, quantity, unit_price: Number(product.price) });
       }
 
       if (lineItems.length === 0) throw new Error('No valid items');
 
-      // Insert order with required fields
-      const orderRes = run(
+      // Insert order — RETURNING gives us the new order_id (replaces lastInsertRowid)
+      const [orderRow] = await tx.unsafe(
         `INSERT INTO orders (customer_id, order_datetime, payment_method, device_type, ip_country,
                              promo_used, order_subtotal, shipping_fee, tax_amount, order_total,
                              risk_score, is_fraud, fulfilled)
-         VALUES (?, datetime('now'), 'card', 'desktop', 'US', 0, ?, 0, 0, ?, 0, 0, 0)`,
-        customerId, totalAmount, totalAmount
+         VALUES ($1, NOW()::text, 'card', 'desktop', 'US', 0, $2, 0, 0, $3, 0, 0, 0)
+         RETURNING order_id`,
+        [customerId, totalAmount, totalAmount]
       );
-      const orderId = orderRes.lastInsertRowid;
+      const orderId = orderRow.order_id;
 
-      // Insert line items
       for (const li of lineItems) {
-        run(
-          'INSERT INTO order_items (order_id, product_id, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?)',
-          orderId, li.product_id, li.quantity, li.unit_price, li.quantity * li.unit_price
+        await tx.unsafe(
+          'INSERT INTO order_items (order_id, product_id, quantity, unit_price, line_total) VALUES ($1, $2, $3, $4, $5)',
+          [orderId, li.product_id, li.quantity, li.unit_price, li.quantity * li.unit_price]
         );
       }
 

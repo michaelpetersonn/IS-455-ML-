@@ -1,162 +1,184 @@
 /**
- * Seed script — creates shop.db at the project root (one level up from web/)
- * and populates it with sample data.
+ * Seed script — connects to Supabase (PostgreSQL) and populates it with
+ * sample data using the schema in supabase/schema.sql.
  *
- * Run: npm run seed   (from the web/ directory)
+ * Setup:
+ *   1. Create web/.env.local with DATABASE_URL=<your Supabase Transaction Mode URL>
+ *   2. Run the schema in Supabase SQL Editor first (supabase/schema.sql)
+ *   3. From the web/ directory: npm run seed
  */
 
-const Database = require('better-sqlite3');
-const path = require('path');
+import postgres from 'postgres';
 
-const DB_PATH = path.join(__dirname, '..', '..', 'shop.db');
-console.log(`Creating / resetting database at: ${DB_PATH}`);
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: DATABASE_URL not set. Add it to web/.env.local');
+  process.exit(1);
+}
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const sql = postgres(process.env.DATABASE_URL, { ssl: 'require' });
 
-// ── Schema ───────────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS customers (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL,
-    email       TEXT    UNIQUE NOT NULL,
-    segment     TEXT    NOT NULL DEFAULT 'bronze'
-                        CHECK(segment IN ('bronze','silver','gold')),
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-  );
+console.log('Connecting to Supabase and seeding data…');
 
-  CREATE TABLE IF NOT EXISTS products (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL,
-    category    TEXT    NOT NULL,
-    price       REAL    NOT NULL,
-    stock_qty   INTEGER NOT NULL DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS orders (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer_id   INTEGER NOT NULL REFERENCES customers(id),
-    order_date    TEXT    NOT NULL DEFAULT (datetime('now')),
-    status        TEXT    NOT NULL DEFAULT 'pending'
-                          CHECK(status IN ('pending','processing','shipped','delivered','cancelled')),
-    total_amount  REAL    NOT NULL DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS order_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id    INTEGER NOT NULL REFERENCES orders(id),
-    product_id  INTEGER NOT NULL REFERENCES products(id),
-    quantity    INTEGER NOT NULL,
-    unit_price  REAL    NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS order_predictions (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer_id    INTEGER NOT NULL REFERENCES customers(id),
-    churn_prob     REAL,
-    predicted_ltv  REAL,
-    priority_score REAL,
-    scored_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-    model_version  TEXT    NOT NULL DEFAULT 'heuristic-v1'
-  );
+// ── Drop and recreate (mirrors supabase/schema.sql) ──────────────────────────
+await sql.unsafe(`
+  TRUNCATE order_predictions, order_items, orders, products, customer_predictions, customers RESTART IDENTITY CASCADE;
 `);
 
 // ── Customers ─────────────────────────────────────────────────────────────────
-const customers = [
-  { name: 'Alice Johnson',  email: 'alice@example.com',  segment: 'gold',   created_at: '2023-01-15' },
-  { name: 'Bob Martinez',   email: 'bob@example.com',    segment: 'silver', created_at: '2023-03-22' },
-  { name: 'Carol White',    email: 'carol@example.com',  segment: 'bronze', created_at: '2024-06-01' },
-  { name: 'David Lee',      email: 'david@example.com',  segment: 'gold',   created_at: '2022-11-05' },
-  { name: 'Eva Nguyen',     email: 'eva@example.com',    segment: 'silver', created_at: '2024-01-10' },
-  { name: 'Frank Torres',   email: 'frank@example.com',  segment: 'bronze', created_at: '2025-02-20' },
-  { name: 'Grace Kim',      email: 'grace@example.com',  segment: 'gold',   created_at: '2022-08-14' },
-  { name: 'Henry Brown',    email: 'henry@example.com',  segment: 'silver', created_at: '2023-07-30' },
+const customerRows = [
+  { full_name: 'Alice Johnson',  email: 'alice@example.com',  loyalty_tier: 'gold',   customer_segment: 'premium',  created_at: '2022-06-15' },
+  { full_name: 'Bob Martinez',   email: 'bob@example.com',    loyalty_tier: 'silver', customer_segment: 'standard', created_at: '2023-01-10' },
+  { full_name: 'Carol White',    email: 'carol@example.com',  loyalty_tier: 'bronze', customer_segment: 'standard', created_at: '2024-03-20' },
+  { full_name: 'David Lee',      email: 'david@example.com',  loyalty_tier: 'gold',   customer_segment: 'premium',  created_at: '2022-11-05' },
+  { full_name: 'Eva Nguyen',     email: 'eva@example.com',    loyalty_tier: 'silver', customer_segment: 'standard', created_at: '2023-08-14' },
+  { full_name: 'Frank Torres',   email: 'frank@example.com',  loyalty_tier: 'bronze', customer_segment: 'budget',   created_at: '2024-07-01' },
+  { full_name: 'Grace Kim',      email: 'grace@example.com',  loyalty_tier: 'gold',   customer_segment: 'premium',  created_at: '2021-12-22' },
+  { full_name: 'Henry Brown',    email: 'henry@example.com',  loyalty_tier: 'silver', customer_segment: 'standard', created_at: '2023-04-30' },
 ];
 
-const insertCustomer = db.prepare(
-  `INSERT OR IGNORE INTO customers (name, email, segment, created_at) VALUES (?, ?, ?, ?)`
-);
-for (const c of customers) insertCustomer.run(c.name, c.email, c.segment, c.created_at);
+for (const c of customerRows) {
+  await sql`
+    INSERT INTO customers (full_name, email, loyalty_tier, customer_segment, created_at)
+    VALUES (${c.full_name}, ${c.email}, ${c.loyalty_tier}, ${c.customer_segment}, ${c.created_at})
+  `;
+}
+console.log(`  Inserted ${customerRows.length} customers`);
 
 // ── Products ──────────────────────────────────────────────────────────────────
-const products = [
-  { name: 'Laptop Pro 15"',     category: 'Electronics',  price: 1299.99, stock_qty: 25 },
-  { name: 'Wireless Mouse',     category: 'Electronics',  price:   29.99, stock_qty: 120 },
-  { name: 'USB-C Hub',          category: 'Electronics',  price:   49.99, stock_qty: 80 },
-  { name: 'Mechanical Keyboard',category: 'Electronics',  price:   89.99, stock_qty: 60 },
-  { name: 'Monitor 27" 4K',     category: 'Electronics',  price:  449.99, stock_qty: 30 },
-  { name: 'Python Crash Course', category: 'Books',        price:   34.99, stock_qty: 200 },
-  { name: 'Clean Code',          category: 'Books',        price:   39.99, stock_qty: 150 },
-  { name: 'Deep Learning Book',  category: 'Books',        price:   59.99, stock_qty: 90 },
-  { name: 'Desk Lamp LED',       category: 'Office',       price:   24.99, stock_qty: 75 },
-  { name: 'Ergonomic Chair',     category: 'Office',       price:  299.99, stock_qty: 15 },
-  { name: 'Notebook Set',        category: 'Office',       price:   12.99, stock_qty: 300 },
-  { name: 'Cable Organizer',     category: 'Office',       price:    9.99, stock_qty: 200 },
+const productRows = [
+  { product_name: 'Laptop Pro 15',           category: 'Electronics', price: 1199.99 },
+  { product_name: 'Wireless Mouse',          category: 'Electronics', price: 29.99   },
+  { product_name: 'USB-C Hub',               category: 'Electronics', price: 49.99   },
+  { product_name: 'Noise-Cancel Headphones', category: 'Electronics', price: 249.99  },
+  { product_name: 'Mechanical Keyboard',     category: 'Electronics', price: 149.99  },
+  { product_name: 'Python Programming',      category: 'Books',       price: 39.99   },
+  { product_name: 'Data Science Handbook',   category: 'Books',       price: 44.99   },
+  { product_name: 'Clean Code',              category: 'Books',       price: 34.99   },
+  { product_name: 'Standing Desk',           category: 'Office',      price: 399.99  },
+  { product_name: 'Monitor 27"',             category: 'Electronics', price: 329.99  },
+  { product_name: 'Desk Lamp',               category: 'Office',      price: 49.99   },
+  { product_name: 'Webcam HD',               category: 'Electronics', price: 79.99   },
 ];
 
-const insertProduct = db.prepare(
-  `INSERT OR IGNORE INTO products (name, category, price, stock_qty) VALUES (?, ?, ?, ?)`
-);
-for (const p of products) insertProduct.run(p.name, p.category, p.price, p.stock_qty);
+for (const p of productRows) {
+  await sql`
+    INSERT INTO products (product_name, category, price, stock_qty, is_active)
+    VALUES (${p.product_name}, ${p.category}, ${p.price}, 100, 1)
+  `;
+}
+console.log(`  Inserted ${productRows.length} products`);
 
-// ── Orders (historical) ───────────────────────────────────────────────────────
-const allCustomers = db.prepare('SELECT id FROM customers').all();
-const allProducts  = db.prepare('SELECT id, price FROM products').all();
-
-const insertOrder = db.prepare(
-  `INSERT INTO orders (customer_id, order_date, status, total_amount) VALUES (?, ?, ?, ?)`
-);
-const insertItem = db.prepare(
-  `INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)`
-);
-
-const statuses = ['pending', 'processing', 'shipped', 'delivered', 'delivered', 'delivered'];
-
-function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-function randomItem(arr) { return arr[randomInt(0, arr.length - 1)]; }
+// ── Helper utilities ──────────────────────────────────────────────────────────
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function pastDate(daysAgo) {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
-  return d.toISOString().slice(0, 10);
+  return d.toISOString().replace('T', ' ').slice(0, 19);
 }
 
-const seedOrders = db.transaction(() => {
-  // Check if orders already exist to avoid duplicate seeding
-  const existing = db.prepare('SELECT COUNT(*) AS n FROM orders').get();
-  if (existing.n > 0) { console.log('Orders already exist, skipping order seed.'); return; }
+const paymentMethods = ['card', 'card', 'card', 'paypal', 'bank', 'crypto'];
+const deviceTypes    = ['desktop', 'desktop', 'mobile', 'mobile', 'tablet'];
+const countries      = ['US', 'US', 'US', 'US', 'CA', 'GB', 'NG', 'RU'];
 
-  for (const customer of allCustomers) {
-    const numOrders = randomInt(2, 8);
-    for (let o = 0; o < numOrders; o++) {
-      const daysAgo = randomInt(1, 400);
-      const status  = randomItem(statuses);
-      const numItems = randomInt(1, 3);
-      let total = 0;
-      const lineItems = [];
-      for (let i = 0; i < numItems; i++) {
-        const product = randomItem(allProducts);
-        const qty = randomInt(1, 3);
-        total += product.price * qty;
-        lineItems.push({ product_id: product.id, quantity: qty, unit_price: product.price });
-      }
-      const orderRes = insertOrder.run(customer.id, pastDate(daysAgo), status, total);
-      for (const li of lineItems) {
-        insertItem.run(orderRes.lastInsertRowid, li.product_id, li.quantity, li.unit_price);
-      }
+const allProducts = await sql`SELECT product_id, price FROM products`;
+const customers   = await sql`SELECT customer_id, loyalty_tier FROM customers`;
+
+// ── Seed orders ───────────────────────────────────────────────────────────────
+let totalOrders = 0;
+
+// Historical fulfilled orders (20–35 per customer)
+for (const cust of customers) {
+  const count = randInt(20, 35);
+  for (let i = 0; i < count; i++) {
+    const daysAgo = randInt(10, 400);
+    const payment = pick(paymentMethods);
+    const device  = pick(deviceTypes);
+    const country = pick(countries);
+    const promo   = Math.random() < 0.2 ? 1 : 0;
+
+    const isFraud = (country === 'NG' || country === 'RU') && payment === 'crypto' && Math.random() < 0.7
+      ? 1
+      : Math.random() < 0.05 ? 1 : 0;
+
+    const riskScore = isFraud
+      ? randInt(60, 95)
+      : country !== 'US' && country !== 'CA' && country !== 'GB'
+        ? randInt(30, 60)
+        : randInt(0, 30);
+
+    const numItems = randInt(1, 3);
+    const chosen = [];
+    for (let j = 0; j < numItems; j++) chosen.push(pick(allProducts));
+
+    const subtotal = chosen.reduce((s, p) => s + Number(p.price), 0);
+    const shipping = subtotal > 200 ? 0 : 9.99;
+    const tax      = parseFloat((subtotal * 0.08).toFixed(2));
+    const total    = parseFloat((subtotal + shipping + tax).toFixed(2));
+
+    const [order] = await sql`
+      INSERT INTO orders (customer_id, order_datetime, payment_method, device_type, ip_country,
+                          promo_used, order_subtotal, shipping_fee, tax_amount, order_total,
+                          risk_score, is_fraud, fulfilled)
+      VALUES (${cust.customer_id}, ${pastDate(daysAgo)}, ${payment}, ${device}, ${country},
+              ${promo}, ${subtotal}, ${shipping}, ${tax}, ${total}, ${riskScore}, ${isFraud}, 1)
+      RETURNING order_id
+    `;
+    for (const p of chosen) {
+      await sql`
+        INSERT INTO order_items (order_id, product_id, quantity, unit_price, line_total)
+        VALUES (${order.order_id}, ${p.product_id}, 1, ${p.price}, ${p.price})
+      `;
     }
+    totalOrders++;
   }
-});
+}
 
-seedOrders();
+// Pending (unfulfilled) orders — shown in warehouse queue
+for (const cust of customers) {
+  const count = randInt(2, 5);
+  for (let i = 0; i < count; i++) {
+    const daysAgo = randInt(0, 7);
+    const payment = pick(paymentMethods);
+    const device  = pick(deviceTypes);
+    const country = pick(countries);
+    const promo   = Math.random() < 0.15 ? 1 : 0;
 
-const counts = {
-  customers: db.prepare('SELECT COUNT(*) AS n FROM customers').get().n,
-  products:  db.prepare('SELECT COUNT(*) AS n FROM products').get().n,
-  orders:    db.prepare('SELECT COUNT(*) AS n FROM orders').get().n,
-};
-console.log(`\n✓ Database seeded:`);
-console.log(`  customers: ${counts.customers}`);
-console.log(`  products:  ${counts.products}`);
-console.log(`  orders:    ${counts.orders}`);
-console.log(`\nRun  npm run dev  to start the app.\n`);
+    const isFraud   = payment === 'crypto' && (country === 'NG' || country === 'RU') ? 1 : 0;
+    const riskScore = isFraud ? randInt(55, 90) : randInt(2, 35);
+
+    const numItems = randInt(1, 4);
+    const chosen = [];
+    for (let j = 0; j < numItems; j++) chosen.push(pick(allProducts));
+
+    const subtotal = chosen.reduce((s, p) => s + Number(p.price), 0);
+    const shipping = subtotal > 200 ? 0 : 9.99;
+    const tax      = parseFloat((subtotal * 0.08).toFixed(2));
+    const total    = parseFloat((subtotal + shipping + tax).toFixed(2));
+
+    const [order] = await sql`
+      INSERT INTO orders (customer_id, order_datetime, payment_method, device_type, ip_country,
+                          promo_used, order_subtotal, shipping_fee, tax_amount, order_total,
+                          risk_score, is_fraud, fulfilled)
+      VALUES (${cust.customer_id}, ${pastDate(daysAgo)}, ${payment}, ${device}, ${country},
+              ${promo}, ${subtotal}, ${shipping}, ${tax}, ${total}, ${riskScore}, ${isFraud}, 0)
+      RETURNING order_id
+    `;
+    for (const p of chosen) {
+      await sql`
+        INSERT INTO order_items (order_id, product_id, quantity, unit_price, line_total)
+        VALUES (${order.order_id}, ${p.product_id}, 1, ${p.price}, ${p.price})
+      `;
+    }
+    totalOrders++;
+  }
+}
+
+const [counts]  = await sql`SELECT COUNT(*) AS n FROM orders`;
+const [pending] = await sql`SELECT COUNT(*) AS n FROM orders WHERE fulfilled = 0`;
+const [fraud]   = await sql`SELECT COUNT(*) AS n FROM orders WHERE is_fraud = 1`;
+
+console.log(`Done. Orders: ${counts.n} total | ${pending.n} pending | ${fraud.n} fraud`);
+console.log('Run "npm run dev" from web/ to start the app.');
+
+await sql.end();

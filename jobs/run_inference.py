@@ -1,5 +1,5 @@
 """
-run_inference.py — Score all unfulfilled orders and write results to order_predictions.
+run_inference.py — Score all unfulfilled orders for fraud and write results to order_predictions.
 
 Usage:
     python jobs/run_inference.py
@@ -21,12 +21,9 @@ import pandas as pd
 
 ROOT = pathlib.Path(__file__).parent.parent
 DB_PATH = ROOT / 'shop.db'
-MODEL_PATH = ROOT / 'jobs' / 'model.pkl'
+MODEL_PATH = ROOT / 'jobs' / 'model.sav'
 
 CATEGORICAL_FEATURES = [
-    'carrier',
-    'shipping_method',
-    'distance_band',
     'payment_method',
     'device_type',
     'customer_segment',
@@ -34,7 +31,6 @@ CATEGORICAL_FEATURES = [
 ]
 
 NUMERIC_FEATURES = [
-    'promised_days',
     'order_total',
     'promo_used',
     'risk_score',
@@ -52,22 +48,28 @@ def main():
 
     con = sqlite3.connect(DB_PATH)
 
+    # Ensure order_predictions table exists with correct columns
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS order_predictions (
+            order_id              INTEGER PRIMARY KEY,
+            fraud_probability     REAL,
+            predicted_fraud       INTEGER,
+            prediction_timestamp  TEXT
+        )
+    """)
+    con.commit()
+
     df = pd.read_sql_query("""
         SELECT
-            s.order_id,
-            s.carrier,
-            s.shipping_method,
-            s.distance_band,
-            s.promised_days,
-            o.order_total,
+            o.order_id,
             o.payment_method,
             o.device_type,
             o.promo_used,
+            o.order_total,
             o.risk_score,
             c.customer_segment,
             c.loyalty_tier
-        FROM shipments s
-        JOIN orders o ON o.order_id = s.order_id
+        FROM orders o
         JOIN customers c ON c.customer_id = o.customer_id
         WHERE o.fulfilled = 0
     """, con)
@@ -88,12 +90,12 @@ def main():
 
     cur = con.cursor()
     cur.executemany("""
-        INSERT INTO order_predictions (order_id, late_delivery_probability, predicted_late_delivery, prediction_timestamp)
+        INSERT INTO order_predictions (order_id, fraud_probability, predicted_fraud, prediction_timestamp)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(order_id) DO UPDATE SET
-            late_delivery_probability = excluded.late_delivery_probability,
-            predicted_late_delivery   = excluded.predicted_late_delivery,
-            prediction_timestamp      = excluded.prediction_timestamp
+            fraud_probability    = excluded.fraud_probability,
+            predicted_fraud      = excluded.predicted_fraud,
+            prediction_timestamp = excluded.prediction_timestamp
     """, [
         (int(row.order_id), round(float(prob), 4), int(pred), now)
         for row, prob, pred in zip(df.itertuples(), probs, preds)

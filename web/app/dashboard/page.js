@@ -10,7 +10,7 @@ export default async function DashboardPage() {
   const customerId = cookieStore.get('customer_id')?.value;
   if (!customerId) redirect('/');
 
-  const customer = get(
+  const customer = await get(
     `SELECT c.customer_id AS id, c.full_name AS name, c.email, c.loyalty_tier AS segment,
             p.churn_prob, p.predicted_ltv, p.priority_score, p.scored_at
      FROM customers c
@@ -21,26 +21,26 @@ export default async function DashboardPage() {
          SELECT customer_id, MAX(scored_at) FROM customer_predictions GROUP BY customer_id
        )
      ) p ON p.customer_id = c.customer_id
-     WHERE c.customer_id = ?`,
+     WHERE c.customer_id = $1`,
     customerId
   );
   if (!customer) redirect('/');
 
-  const stats = get(
+  const stats = await get(
     `SELECT
        COUNT(*)                                   AS order_count,
        COALESCE(SUM(order_total), 0)              AS total_spent,
        COALESCE(AVG(order_total), 0)              AS avg_order,
        MAX(order_datetime)                        AS last_order
-     FROM orders WHERE customer_id = ?`,
+     FROM orders WHERE customer_id = $1`,
     customerId
   );
 
-  const recentOrders = all(
+  const recentOrders = await all(
     `SELECT order_id AS id, order_datetime AS order_date,
             CASE WHEN is_fraud=1 THEN 'cancelled' WHEN fulfilled=1 THEN 'delivered' ELSE 'pending' END AS status,
             order_total AS total_amount
-     FROM orders WHERE customer_id = ?
+     FROM orders WHERE customer_id = $1
      ORDER BY order_datetime DESC LIMIT 5`,
     customerId
   );

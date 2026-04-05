@@ -2,18 +2,49 @@ import { all } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export default function SchemaPage() {
+export default async function SchemaPage() {
   let tables = [];
   let error = null;
 
   try {
-    tables = all(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
-    ).map((row) => ({
-      name: row.name,
-      columns: all(`PRAGMA table_info(${row.name})`),
-      rowCount: all(`SELECT COUNT(*) AS n FROM "${row.name}"`)[0].n,
-    }));
+    const tableRows = await all(`
+      SELECT table_name AS name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_type = 'BASE TABLE'
+      ORDER BY table_name
+    `);
+
+    tables = await Promise.all(
+      tableRows.map(async (row) => {
+        const columns = await all(`
+          SELECT
+            c.ordinal_position  AS cid,
+            c.column_name       AS name,
+            c.data_type         AS type,
+            CASE c.is_nullable WHEN 'NO' THEN 1 ELSE 0 END AS notnull,
+            c.column_default    AS dflt_value,
+            CASE WHEN kcu.column_name IS NOT NULL THEN 1 ELSE 0 END AS pk
+          FROM information_schema.columns c
+          LEFT JOIN (
+            SELECT kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON kcu.constraint_name = tc.constraint_name
+             AND kcu.table_schema   = tc.table_schema
+            WHERE tc.table_schema    = 'public'
+              AND tc.table_name      = $1
+              AND tc.constraint_type = 'PRIMARY KEY'
+          ) kcu ON kcu.column_name = c.column_name
+          WHERE c.table_schema = 'public'
+            AND c.table_name   = $1
+          ORDER BY c.ordinal_position
+        `, row.name);
+
+        const [{ n }] = await all(`SELECT COUNT(*) AS n FROM "${row.name}"`);
+        return { name: row.name, columns, rowCount: Number(n) };
+      })
+    );
   } catch (err) {
     error = err.message;
   }
@@ -28,16 +59,16 @@ export default function SchemaPage() {
       </div>
 
       <p style={{ color: 'var(--muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-        Live view of <code>shop.db</code>. Use this to verify your schema and update prompts if column names differ.
+        Live view of Supabase tables. Use this to verify your schema and data.
       </p>
 
       {error ? (
         <div className="alert alert-error">
-          Could not open database: {error}
+          Could not connect to database: {error}
         </div>
       ) : tables.length === 0 ? (
         <div className="alert alert-error">
-          No tables found. Run <code>npm run seed</code> to initialise the database.
+          No tables found. Run <code>npm run seed</code> after setting <code>DATABASE_URL</code>.
         </div>
       ) : (
         tables.map((table) => (
@@ -55,7 +86,7 @@ export default function SchemaPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>cid</th>
+                    <th>#</th>
                     <th>name</th>
                     <th>type</th>
                     <th>not null</th>

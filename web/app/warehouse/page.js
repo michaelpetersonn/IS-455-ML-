@@ -17,11 +17,11 @@ export const dynamic = 'force-dynamic';
   Only 'pending' and 'processing' orders are shown.
 */
 
-export default function WarehousePage({ searchParams }) {
+export default async function WarehousePage({ searchParams }) {
   const filter = searchParams?.customer?.trim().toLowerCase() ?? '';
   let queue = [];
   try {
-    queue = all(`
+    queue = await all(`
       SELECT
         o.order_id,
         o.order_datetime                                    AS order_date,
@@ -30,21 +30,21 @@ export default function WarehousePage({ searchParams }) {
         o.order_total                                       AS total_amount,
         c.full_name                                         AS customer_name,
         c.loyalty_tier                                      AS segment,
-        CAST(julianday('now') - julianday(o.order_datetime) AS INTEGER)
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - o.order_datetime::timestamp)) / 86400)::integer
                                                             AS days_waiting,
-        COALESCE(op.late_delivery_probability * 100, 50)    AS ml_priority,
-        COALESCE(op.late_delivery_probability, 0)           AS churn_prob,
+        COALESCE(op.fraud_probability * 100, 50)            AS ml_priority,
+        COALESCE(op.fraud_probability, 0)                   AS churn_prob,
         -- composite warehouse priority (higher = more urgent)
         (
-          CAST(julianday('now') - julianday(o.order_datetime) AS INTEGER) * 3
+          FLOOR(EXTRACT(EPOCH FROM (NOW() - o.order_datetime::timestamp)) / 86400)::integer * 3
           + CASE c.loyalty_tier WHEN 'gold' THEN 30 WHEN 'silver' THEN 15 ELSE 0 END
-          + COALESCE(op.late_delivery_probability * 100, 50)
+          + COALESCE(op.fraud_probability * 100, 50)
         )                                                   AS priority
       FROM orders o
       JOIN customers c ON c.customer_id = o.customer_id
       LEFT JOIN order_predictions op ON op.order_id = o.order_id
       WHERE o.fulfilled = 0 AND o.is_fraud = 0
-        ${filter ? `AND lower(c.full_name) LIKE '%' || lower(?) || '%'` : ''}
+        ${filter ? `AND c.full_name ILIKE '%' || $1 || '%'` : ''}
       ORDER BY priority DESC
       LIMIT 50
     `, ...(filter ? [filter] : []));
@@ -94,7 +94,7 @@ export default function WarehousePage({ searchParams }) {
                   <th>Segment</th>
                   <th>Days Waiting</th>
                   <th>Total</th>
-                  <th>Churn Risk</th>
+                  <th>Fraud Risk</th>
                   <th>ML Score</th>
                   <th>Priority ↓</th>
                   <th>Status</th>
